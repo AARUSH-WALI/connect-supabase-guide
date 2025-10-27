@@ -5,8 +5,42 @@ import { useLocation } from "react-router-dom";
 import UserDetailsDialog from "@/components/users/UserDetailsDialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import axios from "axios";
 import { toast } from "@/components/ui/use-toast";
-import { supabase } from "@/integrations/supabase/client";
+import { getApiUrl } from "@/config/api.config";
+
+// API client with error handling
+const apiClient = {
+  get: async (endpoint: string) => {
+    try {
+      const response = await axios.get(getApiUrl(endpoint as any));
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching ${endpoint}:`, error);
+      throw error;
+    }
+  },
+  getCriteria: async () => {
+    try {
+      return await apiClient.get('criteria');
+    } catch (error) {
+      console.error('Error fetching criteria, using defaults:', error);
+      return {
+        best_fit: 80,
+        average_fit: 50,
+        not_fit: 0
+      };
+    }
+  },
+  getUsers: async () => {
+    return await apiClient.get('users');
+  }
+};
+
+// Alias for backward compatibility
+const criteriaApi = {
+  getCriteria: apiClient.getCriteria
+};
 
 export interface UserProfile {
   id: string;
@@ -38,7 +72,9 @@ export interface UserProfile {
   file_url?: string;
 }
 
-const mapResumeToUserProfile = (resume: any, big5Data?: any): UserProfile => {
+const API_BASE_URL = 'http://localhost:5000/api';
+
+const mapResumeToUserProfile = (resume: any): UserProfile => {
   // Format education if it's an array
   const formatEducation = (edu: any[] | string | undefined): string => {
     if (!edu) return '';
@@ -69,26 +105,26 @@ const mapResumeToUserProfile = (resume: any, big5Data?: any): UserProfile => {
     id: resume.id || '',
     name: resume.name || 'Unknown',
     email: resume.email || '',
-    score: big5Data?.total_score || 0,
+    score: resume.fitment_score || 0,
     jobRole: resume.best_fit_for || 'Not Specified',
     experience: formatExperience(resume.longevity_years),
     education: formatEducation(resume.education),
     about: resume.summary || 'No summary available',
     profileImage: '',
-    personalityScores: big5Data ? {
-      extraversion: big5Data.extraversion || 0,
-      agreeableness: big5Data.agreeableness || 0,
-      openness: big5Data.openness || 0,
-      neuroticism: big5Data.neuroticism || 0,
-      conscientiousness: big5Data.conscientiousness || 0
-    } : undefined,
+    personalityScores: {
+      extraversion: resume.extraversion || 0,
+      agreeableness: resume.agreeableness || 0,
+      openness: resume.openness || 0,
+      neuroticism: resume.neuroticism || 0,
+      conscientiousness: resume.conscientiousness || 0
+    },
     status: resume.status || 'pending',
     phone: resume.phone || '',
     address: resume.address || '',
     summary: resume.summary || '',
     best_fit_for: resume.best_fit_for || '',
     created_at: resume.created_at || new Date().toISOString(),
-    fitment_score: big5Data?.total_score || 0,
+    fitment_score: resume.fitment_score || 0,
     skills: formatSkills(resume.skills),
     candidate_type: resume.candidate_type,
     file_url: resume.file_url,
@@ -124,26 +160,16 @@ export default function Users() {
   const [fitmentCriteria, setFitmentCriteria] = useState({ best_fit: 80, average_fit: 50, not_fit: 0 });
   const location = useLocation();
 
-  // Fetch fitment criteria from Supabase
+  // Fetch fitment criteria
   useEffect(() => {
     const fetchCriteria = async () => {
       try {
-        const { data, error } = await supabase
-          .from('fitment_criteria')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .single();
-
-        if (error) throw error;
-        
-        if (data) {
-          setFitmentCriteria({
-            best_fit: data.best_fit || 80,
-            average_fit: data.average_fit || 50,
-            not_fit: data.not_fit || 0
-          });
-        }
+        const data = await apiClient.getCriteria();
+        setFitmentCriteria({
+          best_fit: data.best_fit || 80,
+          average_fit: data.average_fit || 50,
+          not_fit: data.not_fit || 0
+        });
       } catch (error) {
         console.error('Failed to fetch fitment criteria, using defaults', error);
       }
@@ -165,46 +191,20 @@ export default function Users() {
       setIsLoading(true);
       setError(null);
       
-      // Fetch resumes from Supabase
-      const { data: resumes, error: resumesError } = await supabase
-        .from('resumes')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (resumesError) throw resumesError;
-
-      // Fetch Big5 scores
-      const { data: big5Scores, error: big5Error } = await supabase
-        .from('big5_scores' as any)
-        .select('*');
-
-      if (big5Error) {
-        console.error('Error fetching Big5 scores:', big5Error);
+      const response = await apiClient.getUsers();
+      
+      if (response?.success && Array.isArray(response.data)) {
+        const userProfiles = response.data.map((resume: any) => mapResumeToUserProfile(resume));
+        setUsers(userProfiles);
+      } else {
+        throw new Error('Invalid response format from server');
       }
-
-      // Create a map of resume_id to Big5 data
-      const big5Map = new Map();
-      if (big5Scores) {
-        big5Scores.forEach((score: any) => {
-          if (score.resume_id) {
-            big5Map.set(score.resume_id, score);
-          }
-        });
-      }
-
-      // Map resumes to user profiles with Big5 data
-      const userProfiles = (resumes || []).map((resume: any) => {
-        const big5Data = big5Map.get(resume.id);
-        return mapResumeToUserProfile(resume, big5Data);
-      });
-
-      setUsers(userProfiles);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error in fetchUsers:', err);
-      setError('Failed to fetch users from database.');
+      setError('Failed to fetch users. Please make sure the backend server is running.');
       toast({
         title: "Error",
-        description: err.message || 'Failed to fetch users',
+        description: err.response?.data?.message || 'Failed to connect to the server',
         variant: "destructive",
       });
       setUsers([]);
