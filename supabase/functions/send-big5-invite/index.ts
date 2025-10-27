@@ -38,9 +38,9 @@ const handler = async (req: Request): Promise<Response> => {
     // Generate a unique token for this test invitation
     const token = crypto.randomUUID();
     
-    // Create the test URL with the token - use the origin from the request or fallback to localhost for development
-    const origin = req.headers.get('origin') || 'http://localhost:5173';
-    const testUrl = `${origin}/personality-test?token=${token}&email=${encodeURIComponent(candidateEmail)}&name=${encodeURIComponent(candidateName)}${resumeId ? `&resumeId=${resumeId}` : ''}`;
+    // Create the test URL with the token - use the frontend URL
+    const baseUrl = 'https://people-ai-new.vercel.app';
+    const testUrl = `${baseUrl}/personality-test?token=${token}&email=${encodeURIComponent(candidateEmail)}&name=${encodeURIComponent(candidateName)}${resumeId ? `&resumeId=${resumeId}` : ''}`;
 
     console.log('Sending Big5 test invite to:', candidateEmail);
 
